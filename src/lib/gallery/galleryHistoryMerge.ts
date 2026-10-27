@@ -14,7 +14,9 @@ export const mergeLoadedGalleryHistory = (current: GeneratedMedia[], loaded: Gen
     .map(item => {
       const visible = shown.get(item.id);
       if (!visible) return item;
-      // A row shown before its URL could be signed takes the URL from a later page; edits stay.
-      return !visible.url && item.url ? { ...visible, url: item.url } : visible;
+      // Later pages re-sign the same stored file (15-minute URLs) or fill a URL that was
+      // missing. Take that URL; keep the user's edits and any row whose file changed.
+      const sameFile = !visible.url || (!!visible.storagePath && visible.storagePath === item.storagePath);
+      return item.url && item.url !== visible.url && sameFile ? { ...visible, url: item.url } : visible;
     })];
 };

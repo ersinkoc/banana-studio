@@ -40,3 +40,12 @@ test('a later page fills the url of a row shown without one, keeping the user ed
   const kept = mergeLoadedGalleryHistory([row('A', 900, { url: 'https://media.example/current.png' })], [row('A', 900, { url: 'https://media.example/a.png' })], startedAt, new Set(['A']));
   assert.equal(kept[0].url, 'https://media.example/current.png');
 });
+
+test('a later page refreshes the signed URL of the same stored file without dropping edits', () => {
+  const shown = row('A', 900, { url: 'https://media.example/a.png?token=old', storagePath: 'u1/a.png', isFavorite: true });
+  const refreshed = mergeLoadedGalleryHistory([shown], [row('A', 900, { url: 'https://media.example/a.png?token=fresh', storagePath: 'u1/a.png' })], startedAt, new Set(['A']));
+  assert.equal(refreshed[0].url, 'https://media.example/a.png?token=fresh');
+  assert.equal(refreshed[0].isFavorite, true);
+  const otherFile = mergeLoadedGalleryHistory([shown], [row('A', 900, { url: 'https://media.example/old.png?token=x', storagePath: 'u1/old.png' })], startedAt, new Set(['A']));
+  assert.equal(otherFile[0].url, 'https://media.example/a.png?token=old');
+});
