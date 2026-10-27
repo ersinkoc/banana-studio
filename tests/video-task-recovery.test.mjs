@@ -11,7 +11,8 @@ const bundle = async (entry, stubs, expose = []) => {
     plugins:[{name:'stubs',setup(b){
       b.onResolve({filter:/.*/},args=>{const key=Object.keys(stubs).find(stub=>args.path.endsWith(stub));return key?{path:key,namespace:'stub'}:undefined;});
       b.onLoad({filter:/.*/,namespace:'stub'},args=>({contents:stubs[args.path],loader:'js'}));
-      if(expose.length)b.onLoad({filter:new RegExp(entry.replace(/[.]/g,'\\.')+'$')},args=>({contents:fs.readFileSync(args.path,'utf8')+`\nexport { ${expose.join(',')} };`,loader:'ts'}));
+      // Match the file name only: Windows paths use backslashes.
+      if(expose.length)b.onLoad({filter:new RegExp('[\\\\/]'+entry.split('/').pop().replace(/[.]/g,'\\.')+'$')},args=>({contents:fs.readFileSync(args.path,'utf8')+`\nexport { ${expose.join(',')} };`,loader:'ts'}));
       b.onResolve({filter:/^[^./]/},args=>({path:import.meta.resolve(args.path),external:true}));
     }}]});
   return import('data:text/javascript;base64,'+Buffer.from(compiled.outputFiles[0].text).toString('base64'));
