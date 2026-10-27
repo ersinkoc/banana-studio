@@ -11,5 +11,10 @@ export const mergeLoadedGalleryHistory = (current: GeneratedMedia[], loaded: Gen
   const ids = new Set(recent.map(item => item.id));
   const shown = new Map(current.map(item => [item.id, item]));
   return [...recent, ...loaded.filter(item => !ids.has(item.id) && (shown.has(item.id) || !delivered.has(item.id)))
-    .map(item => shown.get(item.id) ?? item)];
+    .map(item => {
+      const visible = shown.get(item.id);
+      if (!visible) return item;
+      // A row shown before its URL could be signed takes the URL from a later page; edits stay.
+      return !visible.url && item.url ? { ...visible, url: item.url } : visible;
+    })];
 };

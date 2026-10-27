@@ -32,3 +32,11 @@ test('a single snapshot still shows every row, and a job submitted during loadin
   const merged = mergeLoadedGalleryHistory([row('J', 1200, { status: 'completed' })], [row('J', 1200, { status: 'processing' })], startedAt, new Set());
   assert.deepEqual(merged.map(item => item.status), ['completed']);
 });
+
+test('a later page fills the url of a row shown without one, keeping the user edits', () => {
+  const merged = mergeLoadedGalleryHistory([row('A', 900, { url: '', isFavorite: true })], [row('A', 900, { url: 'https://media.example/a.png' })], startedAt, new Set(['A']));
+  assert.equal(merged[0].url, 'https://media.example/a.png');
+  assert.equal(merged[0].isFavorite, true);
+  const kept = mergeLoadedGalleryHistory([row('A', 900, { url: 'https://media.example/current.png' })], [row('A', 900, { url: 'https://media.example/a.png' })], startedAt, new Set(['A']));
+  assert.equal(kept[0].url, 'https://media.example/current.png');
+});
