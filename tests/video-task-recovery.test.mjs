@@ -36,6 +36,21 @@ test('Video Edit preprocessing rides out transient poll errors but stops on real
   } finally { globalThis.setTimeout = timer; globalThis.fetch = fetchImpl; }
 });
 
+test('the client keeps an accepted Seedance task when only the gallery save failed', async () => {
+  const { createVideoTask } = await bundle('src/services/runwayService.ts', {
+    '/authService': 'export const logUsage=()=>{};export const supabase={auth:{getSession:async()=>({data:{session:{access_token:"t",user:{id:"u1"}}}})}};',
+    '/storageService': 'export const uploadBase64ToPublicUrl=async()=>"";export const uploadBlobToPublicUrl=async()=>"";export const uploadVideoBlobToPublicUrl=async()=>"";export const refreshMediaAccessUrl=async u=>u;',
+    '/providerRouting': 'export const selectProvider=()=>"fal";',
+  });
+  const config = { mode: 'video', videoModel: 'seedance-2.5', prompt: 'a fox', referenceImages: [], referenceVideos: [], referenceAudios: [],
+    videoAspectRatio: '16:9', videoQuality: '720p', videoDuration: 5, audioEnabled: true, videoOperation: 'generate', count: 1 };
+  const fetchImpl = globalThis.fetch;
+  const submit = async response => { globalThis.fetch = async () => response;
+    try { return (await createVideoTask(config, { id: 'gen-1' })).taskId; } catch (error) { return `error: ${error.message}`; } finally { globalThis.fetch = fetchImpl; } };
+  assert.equal(await submit(respond({ error: 'saved task could not be updated', taskId: 'bs_fal_seedance-2.5_x' }, 503)), 'bs_fal_seedance-2.5_x');
+  assert.equal(await submit(respond({ error: 'rejected' }, 422)), 'error: rejected');
+});
+
 test('an accepted Seedance task is saved on the caller\'s gallery row by the server', async () => {
   const recorder = `const from=table=>{const op={table,op:'select'};const q={select(){return q},update(v){op.op='update';op.value=v;return q},insert(v){op.op='insert';op.value=v;return q},
     eq(k,v){(op.where=op.where||{})[k]=v;return q},limit(){return q},maybeSingle(){return q},then(ok,fail){globalThis.__ops.push(op);return Promise.resolve(globalThis.__db(op)).then(ok,fail)}};return q;};`;

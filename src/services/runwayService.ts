@@ -302,6 +302,11 @@ const normalizeVideoForEdit = async (
       if (transient && ++transientErrors < 5) continue;
       throw new Error(statusData?.error || 'Source-video compatibility preprocessing failed.');
     }
+    // An unreadable 200 body is a failed poll too; reset only after a readable status.
+    if (!statusData) {
+      if (++transientErrors >= 5) throw new Error('Source-video compatibility preprocessing status could not be read.');
+      continue;
+    }
     transientErrors = 0;
     if (statusData?.status === 'SUCCEEDED' && typeof statusData.videoUrl === 'string') {
       return statusData.videoUrl;
@@ -1032,7 +1037,8 @@ export const createVideoTask = async (
   });
 
   const createData = await createRes.json().catch(() => null);
-  if (!createRes.ok) throw new Error(createData?.error || 'Failed to start video generation');
+  // As with H3, an accepted task stays usable if only its gallery save failed.
+  if (!createRes.ok && !createData?.taskId) throw new Error(createData?.error || 'Failed to start video generation');
   if (!createData?.taskId) throw new Error('No task ID returned');
 
   const usage = createData.usage && typeof createData.usage === 'object'
