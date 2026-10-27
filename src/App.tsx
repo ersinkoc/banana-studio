@@ -28,6 +28,7 @@ import { createRecreateConfig, mergeRecreateHydration } from './lib/gallery/recr
 import { validateImageGenerationReferences } from './lib/images/imagePrompting';
 import { prepareProtectedImageSource, finishProtectedImageEdit } from './services/imageEditService';
 import { getGalleryEditSourceId } from './lib/gallery/galleryEditJobs';
+import { createFavoriteWriter } from './lib/gallery/favoriteWrites';
 import { mergeLoadedGalleryHistory } from './lib/gallery/galleryHistoryMerge';
 import { mergeReconciledGalleryCosts } from './lib/gallery/galleryBillingRefresh';
 import { createPromptPreparation } from './lib/prompts/promptPreparation';
@@ -1252,16 +1253,17 @@ const AuthorizedWorkspace: React.FC<{
     }
   };
 
+  // Serialized per media ID so overlapping clicks cannot roll back to a stale value.
+  const favoriteWriter = useRef(createFavoriteWriter(
+    (id, isFavorite) => toggleFavorite(id, isFavorite),
+    (id, isFavorite) => setGeneratedMedia(prev => prev.map(m => m.id === id ? { ...m, isFavorite } : m)),
+    e => console.error("Toggle favorite failed", e),
+  )).current;
+
   const handleToggleFavorite = async (media: GeneratedMedia) => {
     const newVal = !media.isFavorite;
     setGeneratedMedia(prev => prev.map(m => m.id === media.id ? { ...m, isFavorite: newVal } : m));
-    try {
-      await toggleFavorite(media.id, newVal);
-    } catch (e) {
-      console.error("Toggle favorite failed", e);
-      // Revert on failure
-      setGeneratedMedia(prev => prev.map(m => m.id === media.id ? { ...m, isFavorite: !newVal } : m));
-    }
+    await favoriteWriter(media.id, !!media.isFavorite, newVal);
   };
 
   const handleMoveImages = async (mediaIds: string[], folderId: string | null) => {
