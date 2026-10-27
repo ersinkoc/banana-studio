@@ -74,9 +74,10 @@ export const runImageJob = async (db:any,job:ImageJobMessage) => {
       // A removed reference never becomes available again; end the job instead
       // of re-admitting it on every redelivery.
       if (!(error instanceof MediaAccessError) || error.temporary) throw error;
+      // Reject the audit first: a redelivery opens a fresh audit, but a closed job can't repair one.
+      await guard.finish('rejected');
       await rpc(db,'finish_image_job',{p_id:job.id,p_claim:token,p_success:false,p_metadata:null,p_storage_path:null,
         p_error:'A reference is unavailable or was removed. Attach that image again. No generation was submitted.'});
-      await guard.finish('rejected');
       return;
     }
     await executeOpenAIImage({method:'POST',headers:{},body:{...claim.payload,referenceImages:references}} as VercelRequest,response,{
