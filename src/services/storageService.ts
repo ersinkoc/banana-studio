@@ -1907,19 +1907,14 @@ export const saveFolder = async (folder: Folder): Promise<void> => {
   const operationUserId = await bindMediaSession();
   if (supabase && !operationUserId) throw new Error('Sign in to save a reference.');
   if (supabase) {
-    try {
-      const userId = operationUserId;
-      if (!userId) throw new Error('Not authenticated');
-      await supabase.from('folders').insert({
-        id: folder.id,
-        user_id: userId,
-        name: folder.name,
-        created_at: folder.createdAt,
-        parent_id: folder.parentId || null
-      });
-    } catch (e) {
-      console.error("Supabase create folder failed", e);
-    }
+    const { error } = await supabase.from('folders').insert({
+      id: folder.id,
+      user_id: operationUserId,
+      name: folder.name,
+      created_at: folder.createdAt,
+      parent_id: folder.parentId || null
+    });
+    if (error) throw new Error(`Folder could not be created: ${error.message}`);
   }
 
   try {
@@ -2230,17 +2225,14 @@ export const saveTemplate = async (template: Template): Promise<void> => {
   const operationUserId = await bindMediaSession();
   if (supabase && !operationUserId) throw new Error('Sign in to save a reference.');
   if (supabase) {
-    try {
-      const userId = operationUserId;
-      if (!userId) throw new Error('Not authenticated');
-      await supabase.from('templates').upsert({
-        id: template.id,
-        user_id: userId,
-        name: template.name,
-        config: template.config,
-        created_at: template.createdAt
-      });
-    } catch (e) { }
+    const { error } = await supabase.from('templates').upsert({
+      id: template.id,
+      user_id: operationUserId,
+      name: template.name,
+      config: template.config,
+      created_at: template.createdAt
+    });
+    if (error) throw new Error(`Template could not be saved: ${error.message}`);
   }
 
   try {
@@ -2268,7 +2260,10 @@ export const getTemplates = async (): Promise<Template[]> => {
 };
 
 export const deleteTemplate = async (id: string): Promise<void> => {
-  if (supabase) await supabase.from('templates').delete().eq('id', id);
+  if (supabase) {
+    const { error } = await supabase.from('templates').delete().eq('id', id);
+    if (error) throw new Error(`Template could not be deleted: ${error.message}`);
+  }
   try {
     const db = await openDB();
     db.transaction(TEMPLATE_STORE_NAME, 'readwrite').objectStore(TEMPLATE_STORE_NAME).delete(id);
