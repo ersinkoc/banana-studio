@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { describeEvoLinkFailure } from './_lib/evolink-errors.js';
 import { applyCors, requireUser } from './_lib/auth.js';
-import { prepareTaskRegistry, registerProviderTask } from './_lib/providerTasks.js';
+import { isGenerationId, prepareTaskRegistry, registerProviderTask, saveGenerationTask } from './_lib/providerTasks.js';
 
 const EVOLINK_BASE = 'https://api.evolink.ai';
 
@@ -18,6 +18,7 @@ interface GenerateRequest {
   generateAudio: boolean;
   referenceEditMode?: boolean;
   editSourcePreparationVersion?: number;
+  generationId?: string;
 }
 
 const hasInvalidMediaUrls = (urls: unknown): boolean => urls != null && (
@@ -88,6 +89,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({
         error: 'Reference media must be arrays of public HTTP(S) URLs. Local blob/data URLs cannot be used by Seedance.',
       });
+    }
+    if (body.generationId !== undefined && !isGenerationId(body.generationId)) {
+      return res.status(400).json({ error: 'A valid generation ID is required.' });
     }
     const maxImages = mode === 'image_to_video' ? 2 : videoModel === 'seedance-2.5' ? 30 : 9;
     const maxVideos = videoModel === 'seedance-2.5' ? 10 : 3;
@@ -216,6 +220,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     await registerProviderTask(registry, 'evolink', data.id, user.id);
+    if (body.generationId && !await saveGenerationTask(registry, body.generationId, user.id, data.id)) {
+      return res.status(503).json({ error: `Generation was submitted, but its saved video could not be updated (Task: ${data.id}). Do not submit again; check task history or contact an administrator.`, taskId: data.id });
+    }
 
     return res.status(200).json({
       taskId: data.id,
