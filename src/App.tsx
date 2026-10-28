@@ -1258,7 +1258,7 @@ const AuthorizedWorkspace: React.FC<{
           const at = list.findIndex(m => m.createdAt < media.createdAt);
           return at < 0 ? [...list, media] : [...list.slice(0, at), media, ...list.slice(at)];
         }, prev));
-        toast.error('Delete Failed', `${failed.length} of ${toDelete.length} images could not be deleted and were restored. Sign in again and retry.`);
+        toast.error('Delete Failed', `${failed.length} of ${toDelete.length} images could not be deleted and were restored. Check that you are signed in and try again.`);
         return;
       }
       toast.error('Delete Failed', 'Some images could not be fully deleted. They will be retried automatically.');

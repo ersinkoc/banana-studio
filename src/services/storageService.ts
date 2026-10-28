@@ -1671,6 +1671,21 @@ export const deleteImage = async (media: GeneratedMedia): Promise<void> => {
   if (supabase) {
     const userId = await bindMediaSession();
     if (!userId) throw new Error('Not authenticated');
+    // Delete or queue the DB row first: if it can be neither, this throws and
+    // the item is restored with its files intact.
+    try {
+      const { error: dbError } = await supabase.from('generations').delete().eq('id', media.id);
+      if (dbError) {
+        console.error(`DB delete failed for ${media.id}, queuing for retry:`, dbError.message);
+        addPendingDeletion(media.id);
+      } else {
+        removePendingDeletion(media.id);
+      }
+    } catch (e) {
+      console.error(`DB delete error for ${media.id}, queuing for retry:`, e);
+      addPendingDeletion(media.id);
+    }
+
     // Delete storage files (best-effort - files may already be gone)
     try {
       const storagePath = media.storagePath || `${userId}/${getOriginalStoragePath(media.id)}`;
@@ -1684,26 +1699,12 @@ export const deleteImage = async (media: GeneratedMedia): Promise<void> => {
     } catch (e) {
       // Non-fatal: storage files may not exist
     }
-
-    // Delete DB row — if this fails, queue for retry so the image stays hidden
-    try {
-      const { error: dbError } = await supabase.from('generations').delete().eq('id', media.id);
-      if (dbError) {
-        console.error(`DB delete failed for ${media.id}, queuing for retry:`, dbError.message);
-        addPendingDeletion(media.id);
-      } else {
-        removePendingDeletion(media.id);
-      }
-    } catch (e) {
-      console.error(`DB delete error for ${media.id}, queuing for retry:`, e);
-      addPendingDeletion(media.id);
-    }
   }
 
   await deleteImagesFromIndexedDb([media.id]);
 };
 
-/** Items whose delete failed without being queued for retry; they still exist. */
+/** Items whose delete failed without being queued for retry; their row and files still exist. */
 export class DeleteImagesError extends Error {
   constructor(readonly failedIds: string[], total: number) { super(`${failedIds.length} of ${total} items could not be deleted.`); }
 }
