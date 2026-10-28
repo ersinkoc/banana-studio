@@ -59,6 +59,8 @@ test('release auditing covers database sidecars, Windows profiles and fal keys w
   assert.deepEqual(rules('deploy.md', `FAL_KEY="${falKey}"`), ['provider-credential']);
   assert.ok(!JSON.stringify(inspectContent('deploy.md', Buffer.from(falKey))).includes(falKey));
   assert.deepEqual(rules('style.css', '.task-list-item-checkbox-container-wrapper{}'), []);
+  assert.deepEqual(rules('a.ts', 'x' + 'AIza' + 'A'.repeat(40)), ['provider-credential']);
+  assert.deepEqual(rules('a.ts', 'x' + ['ghp', 'A'.repeat(36)].join('_')), ['provider-credential']);
   assert.deepEqual(rules('a.ts', `const k = "${['sk', 'proj', 'A'.repeat(40)].join('-')}"`), ['provider-credential']);
 });
 
