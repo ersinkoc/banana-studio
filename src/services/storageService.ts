@@ -1703,13 +1703,18 @@ export const deleteImage = async (media: GeneratedMedia): Promise<void> => {
   await deleteImagesFromIndexedDb([media.id]);
 };
 
+/** Items whose delete failed without being queued for retry; they still exist. */
+export class DeleteImagesError extends Error {
+  constructor(readonly failedIds: string[], total: number) { super(`${failedIds.length} of ${total} items could not be deleted.`); }
+}
+
 export const deleteImages = async (medias: GeneratedMedia[]): Promise<void> => {
   if (medias.length === 0) return;
   // Every delete still runs. One that failed without being queued for retry
   // must reach the caller instead of a success message.
   const results = await Promise.allSettled(medias.map((media) => deleteImage(media)));
-  const failed = results.filter(result => result.status === 'rejected').length;
-  if (failed) throw new Error(`${failed} of ${medias.length} items could not be deleted.`);
+  const failedIds = medias.filter((_, index) => results[index].status === 'rejected').map(media => media.id);
+  if (failedIds.length) throw new DeleteImagesError(failedIds, medias.length);
 };
 
 export const toggleFavorite = async (id: string, isFavorite: boolean): Promise<void> => {
