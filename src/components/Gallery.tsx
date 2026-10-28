@@ -1092,8 +1092,19 @@ export const Gallery: React.FC<GalleryProps> = ({
     };
 
     container.addEventListener('scroll', handleScroll);
-    return () => container.removeEventListener('scroll', handleScroll);
-  }, [hasMoreImages, allVisibleImages.length]);
+    // A page that does not fill the view cannot scroll, so also check after
+    // each render of more items, a column change and a window resize.
+    handleScroll();
+    window.addEventListener('resize', handleScroll);
+    // Content that grows or shrinks later (another folder, loaded cards) changes whether it fills the view.
+    const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(handleScroll);
+    for (const child of Array.from(container.children) as Element[]) resize?.observe(child);
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('resize', handleScroll);
+      resize?.disconnect();
+    };
+  }, [hasMoreImages, allVisibleImages, displayCount, gridCols]);
 
   useEffect(() => {
     setComparisonIds(null);
@@ -1650,8 +1661,11 @@ export const Gallery: React.FC<GalleryProps> = ({
         const img = images.find(i => i.id === id);
         if (!img) return;
         const response = await fetch(img.url);
+        // An error body must never be saved as the media file.
+        if (!response.ok) throw new Error(`Download failed (${response.status}).`);
         const blob = await response.blob();
-        zip.file(`banana-${id}.${blob.type === 'image/jpeg' ? 'jpg' : blob.type === 'image/webp' ? 'webp' : 'png'}`, blob);
+        const ext = img.mediaType === 'video' ? 'mp4' : blob.type === 'image/jpeg' ? 'jpg' : blob.type === 'image/webp' ? 'webp' : 'png';
+        zip.file(`banana-${id}.${ext}`, blob);
       });
 
       await Promise.all(promises);
@@ -1700,6 +1714,7 @@ export const Gallery: React.FC<GalleryProps> = ({
   const handleDownloadPNG = async (media: GeneratedMedia) => {
     try {
       const response = await fetch(media.url);
+      if (!response.ok) throw new Error(`Download failed (${response.status}).`);
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
 

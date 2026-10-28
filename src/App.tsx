@@ -28,6 +28,7 @@ import { createRecreateConfig, mergeRecreateHydration } from './lib/gallery/recr
 import { validateImageGenerationReferences } from './lib/images/imagePrompting';
 import { prepareProtectedImageSource, finishProtectedImageEdit } from './services/imageEditService';
 import { getGalleryEditSourceId } from './lib/gallery/galleryEditJobs';
+import { isStuckPendingMedia } from './lib/gallery/stuckPending';
 import { mergeLoadedGalleryHistory } from './lib/gallery/galleryHistoryMerge';
 import { mergeReconciledGalleryCosts } from './lib/gallery/galleryBillingRefresh';
 import { createPromptPreparation } from './lib/prompts/promptPreparation';
@@ -270,11 +271,16 @@ const AuthorizedWorkspace: React.FC<{
           }, (error) => {
             if (!cancelled) setGalleryHistoryError(error.message);
           }).finally(() => { if (!cancelled) setIsGalleryIndexLoading(false); }),
-          getTemplates(),
+          // Templates load separately: their failure must not block the gallery.
+          getTemplates().catch(error => {
+            console.error('Failed to load templates', error);
+            if (!cancelled) toast.error('Templates Unavailable', 'Saved templates could not be loaded. Reload to try again.');
+            return null;
+          }),
         ]);
         if (cancelled) return;
 
-        const normalizedTemplates = savedTemplates.map(template => ({
+        const normalizedTemplates = (savedTemplates || []).map(template => ({
           ...template,
           config: {
             ...template.config,
@@ -288,7 +294,7 @@ const AuthorizedWorkspace: React.FC<{
         const migratedHistory = history.map(normalizeStoredMedia);
 
         mergeHistoryPage(migratedHistory);
-        setTemplates(normalizedTemplates);
+        if (savedTemplates) setTemplates(normalizedTemplates);
         
         // Resume pending/processing videos and recover rows that were marked
         // failed only because the provider status endpoint returned a transient
@@ -351,34 +357,21 @@ const AuthorizedWorkspace: React.FC<{
   // or the user closed the tab mid-flight before the task_id was saved.
   useEffect(() => {
     if (!isAuthenticated) return;
-    const STUCK_PENDING_MS = 90_000;
     const interval = setInterval(() => {
       const now = Date.now();
       setGeneratedMedia(prev => {
         let changed = false;
         const next = prev.map(item => {
-          if (
-            item.status === 'pending' &&
-            now - item.createdAt > STUCK_PENDING_MS
-          ) {
-            // Video: needs a provider task_id to be resumable.
-            // Image (GPT Image 2): needs falRequestId from fal.ai.
-            const isVideo = item.mediaType === 'video';
-            const isImage = item.mediaType === 'image';
-            const stuck = (isVideo && (!item.taskId || item.taskId === ''))
-              || (isImage && item.imageModel !== SUNBURST_MODEL && !item.falRequestId);
-            if (stuck) {
-              changed = true;
-              const errMsg = 'Generation request did not start (timed out before a task ID was returned). You can remove this entry.';
-              if (isVideo) {
-                updateVideoStatus(item.id, 'failed', { metadata: { error: errMsg } }).catch(() => {});
-              } else if (isImage) {
-                updateImageStatus(item.id, 'failed', { metadata: { error: errMsg } }).catch(() => {});
-              }
-              return { ...item, isLoading: false, status: 'failed' as const, error: errMsg };
-            }
+          // Only cards that never received a provider handle are failed here.
+          if (!isStuckPendingMedia(item, now)) return item;
+          changed = true;
+          const errMsg = 'Generation request did not start (timed out before a task ID was returned). You can remove this entry.';
+          if (item.mediaType === 'video') {
+            updateVideoStatus(item.id, 'failed', { metadata: { error: errMsg } }).catch(() => {});
+          } else {
+            updateImageStatus(item.id, 'failed', { metadata: { error: errMsg } }).catch(() => {});
           }
-          return item;
+          return { ...item, isLoading: false, status: 'failed' as const, error: errMsg };
         });
         return changed ? next : prev;
       });
@@ -473,7 +466,9 @@ const AuthorizedWorkspace: React.FC<{
         const renew = (items: GeneratedMedia[]) => items.map(item => {
           const updated = refreshed.get(item.id);
           // Keep in-flight generation progress; renew only existing media links.
-          return updated ? { ...item, url: updated.url, thumbnailUrl: updated.thumbnailUrl } : item;
+          // An empty saved URL (still saving, or read before completion) never blanks a live one.
+          if (!updated?.url) return item;
+          return { ...item, url: updated.url, thumbnailUrl: updated.thumbnailUrl || item.thumbnailUrl };
         });
         if (adminGalleryUser) setAdminGalleryMedia(renew);
         else setGeneratedMedia(renew);
@@ -809,7 +804,8 @@ const AuthorizedWorkspace: React.FC<{
       const message = (error as any)?.message || 'Generation failed';
       setGeneratedMedia(prev => prev.map(item =>
         item.id === placeholder.id
-          ? { ...item, isLoading: false, url: '', status: 'failed', error: message, imageProgress: undefined }
+          // Clear the submission stage too: Gallery hides Recover while it reads 'preparing'.
+          ? { ...item, isLoading: false, url: '', status: 'failed', error: message, imageProgress: undefined, imageStage: undefined, imageQueueWaitReason: undefined }
           : item
       ));
       return { ok: false, error: message };
@@ -1553,8 +1549,12 @@ const AuthorizedWorkspace: React.FC<{
         toast.success('Variation Generated!', variedPrompt.length > 60 ? variedPrompt.substring(0, 60) + '...' : variedPrompt);
       } catch (error: any) {
         console.error("Variation generation failed", error);
-        setGeneratedMedia(prev => prev.filter(item => item.id !== placeholder.id));
         const { title, message } = parseErrorMessage(error);
+        // Like a batch image: keep the failed card. A server-queued job already
+        // has a saved failed row that would otherwise reappear after reload.
+        setGeneratedMedia(prev => prev.map(item => item.id === placeholder.id
+          ? { ...item, isLoading: false, url: '', status: 'failed', error: (error as any)?.message || message, imageProgress: undefined, imageStage: undefined }
+          : item));
         toast.dismissToast(toastId);
         toast.error(title, message);
       } finally {
@@ -1601,7 +1601,10 @@ const AuthorizedWorkspace: React.FC<{
       }
 
       const response = await fetch(media.url);
+      // An expired link returns an error page; never add that as an image.
+      if (!response.ok) throw new Error(`Reference download failed (${response.status})`);
       const blob = await response.blob();
+      if (!blob.size || /^(?:text\/|application\/json)/i.test(blob.type)) throw new Error('Reference download did not return an image.');
 
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -1610,7 +1613,9 @@ const AuthorizedWorkspace: React.FC<{
 
           setConfig(prev => {
             const isH3Video = prev.mode === 'video' && prev.videoModel === 'minimax-h3';
-            const MAX_IMAGES = isH3Video ? (prev.h3MaxMode&&prev.h3MaxMode!=='auto'?H3_MAX_CAPABILITIES[getH3MaxMode(prev)].images.max+(getH3MaxMode(prev)==='reference_to_video'?new Set([prev.h3MaxOptions?.startImageId,prev.h3MaxOptions?.middleImageId,prev.h3MaxOptions?.endImageId].filter(id=>id&&prev.referenceImages.some(ref=>ref.id===id))).size:0):9) : prev.mode === 'image' && prev.imageModel === SUNBURST_MODEL ? 16 : 14;
+            const MAX_IMAGES = isH3Video ? (prev.h3MaxMode&&prev.h3MaxMode!=='auto'?H3_MAX_CAPABILITIES[getH3MaxMode(prev)].images.max+(getH3MaxMode(prev)==='reference_to_video'?new Set([prev.h3MaxOptions?.startImageId,prev.h3MaxOptions?.middleImageId,prev.h3MaxOptions?.endImageId].filter(id=>id&&prev.referenceImages.some(ref=>ref.id===id))).size:0):9)
+              : prev.mode === 'video' && prev.videoModel === 'seedance-2.0' ? 9
+              : prev.mode === 'image' && prev.imageModel === SUNBURST_MODEL ? 16 : 14;
             if ((prev.referenceImages?.length || 0) >= MAX_IMAGES) {
               toast.warning('Limit Reached', `Maximum of ${MAX_IMAGES} reference images allowed for this action.`);
               return prev;

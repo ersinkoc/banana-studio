@@ -145,14 +145,17 @@ export class LocalWorkspace {
     if(name==='claim_image_job') {
       if(['completed','failed'].includes(job.state))return {action:'stop'};
       if(job.dispatchedAt)return {action:'observe',claim:job.claim,audit:job.audit,dispatchedAt:job.dispatchedAt};
+      // As in SQL (after observe): a removed generation is never sent to the provider.
+      if(!this.get('generations',job.id)){job.state='failed';this.job(job.id,job);return {action:'stop'};}
       if(job.state==='preparing'&&job.claimedAt>Date.now()-60_000)return {action:'wait',retryAfter:5};
       if(job.retryAt>Date.now())return {action:'wait',retryAfter:Math.ceil((job.retryAt-Date.now())/1000)};
       job.claim=a.p_claim;job.claimedAt=Date.now();job.audit=randomUUID();job.state='preparing';this.db.prepare('INSERT INTO ledger VALUES (?,?)').run(job.audit,JSON.stringify({id:job.audit,generationId:job.id,kind:'image',state:'accepted',at:Date.now()}));this.job(job.id,job);return {action:'prepare',payload:this.materialize(job.payload),audit:job.audit,claim:job.claim};
     }
-    if(name==='dispatch_image_job') {if(job.claim!==a.p_claim||job.dispatchedAt)return false;job.dispatchedAt=new Date().toISOString();job.state='dispatched';this.job(job.id,job);const row=this.get('generations',job.id);if(row)this.put('generations',job.id,{...row,status:'processing',metadata:{...row.metadata,...a.p_metadata,imageJobState:'dispatched'}});return true;}
+    if(name==='dispatch_image_job') {if(job.claim!==a.p_claim||job.dispatchedAt||job.state!=='preparing'||!this.get('generations',job.id))return false;job.dispatchedAt=new Date().toISOString();job.state='dispatched';this.job(job.id,job);const row=this.get('generations',job.id);if(row)this.put('generations',job.id,{...row,status:'processing',metadata:{...row.metadata,...a.p_metadata,imageJobState:'dispatched'}});return true;}
     if(name==='defer_refused_image_job') {if(job.claim!==a.p_claim)return false;job.dispatchedAt=null;job.state='queued';job.retryAt=Date.now()+Math.min(3600,Math.max(1,a.p_retry_after||60))*1000;this.job(job.id,job);return true;}
     if(name==='finish_image_job') {
-      if(job.claim!==a.p_claim)return false;job.state=a.p_success?'completed':'failed';this.job(job.id,job);const row=this.get('generations',job.id);if(row)this.put('generations',job.id,{...row,status:job.state,storage_path:a.p_storage_path||row.storage_path,metadata:{...row.metadata,...a.p_metadata,...(a.p_error?{error:a.p_error}:{}),imageJobState:job.state}});return true;
+      // As in SQL: a finished job never changes again, and a failure never downgrades a completed row.
+      if(job.claim!==a.p_claim||['completed','failed'].includes(job.state))return false;job.state=a.p_success?'completed':'failed';this.job(job.id,job);const row=this.get('generations',job.id);if(row&&(a.p_success||row.status!=='completed'))this.put('generations',job.id,{...row,status:job.state,storage_path:a.p_storage_path||row.storage_path,metadata:{...row.metadata,...a.p_metadata,...(a.p_error?{error:a.p_error}:{}),imageJobState:job.state}});return true;
     }
     throw new Error('Unsupported local worker operation.');
   }

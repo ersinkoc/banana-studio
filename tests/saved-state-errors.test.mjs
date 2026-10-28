@@ -10,7 +10,7 @@ const fakeClient = `const from=table=>{const op={table,op:'select'};const q={sel
   const client={from,storage:{from:()=>({})},auth:{getSession:async()=>({data:{session:{user:{id:'u1'}}}}),onAuthStateChange:()=>({data:{subscription:{unsubscribe(){}}}})}};`;
 const stubs = {
   authService: `${fakeClient}export const supabase=client;export const SUPABASE_URL='https://x.supabase.co';export const getCurrentUserId=async()=>'u1';`,
-  'supabase-js': `${fakeClient}export const createClient=()=>client;`,
+  'supabase-js': `${fakeClient}export const createClient=()=>client;export const isAuthSessionMissingError=error=>error?.name==='AuthSessionMissingError';`,
   runtimeConfig: 'export const isLocalWorkspace=()=>false;export const getWorkspaceConfig=()=>({mode:"cloud"});export const getCloudPublicConfig=()=>({supabaseUrl:"https://x.supabase.co",supabasePublishableKey:"k"});',
   browserClient: 'export const createLocalWorkspaceClient=()=>({});',
   'tus-js-client': 'export class Upload{}',
