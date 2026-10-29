@@ -5,13 +5,16 @@ import { fileURLToPath } from 'node:url';
 
 // deleteImage removes an item's files only after its row is deleted or queued for
 // retry. An item that could be neither is restored by the caller, so its files must remain.
-const f = { rowError: false, quota: false, events: [], queued: null };
+const f = { rowError: false, quota: false, blocked: false, events: [], queued: null };
 f.client = {
   from(table) {
     assert.equal(table, 'generations');
-    const query = { delete: () => query, eq: () => query, then: (resolve, reject) => {
+    let id;
+    const query = { delete: () => query, eq: (_column, value) => { id = value; return query; }, then: (resolve, reject) => {
       f.events.push('row');
-      return Promise.resolve({ error: f.rowError ? { message: 'Row delete failed' } : null }).then(resolve, reject);
+      // rowError: true fails every row; a list fails only those ids.
+      const failed = Array.isArray(f.rowError) ? f.rowError.includes(id) : f.rowError;
+      return Promise.resolve({ error: failed ? { message: 'Row delete failed' } : null }).then(resolve, reject);
     } };
     return query;
   },
@@ -29,10 +32,10 @@ const { deleteImages, DeleteImagesError } = await import(`data:text/javascript;b
 const media = id => ({ id, url: `https://example.invalid/${id}.png`, createdAt: 1 });
 
 function setup(t, options) {
-  Object.assign(f, { rowError: false, quota: false, events: [], queued: null }, options);
+  Object.assign(f, { rowError: false, quota: false, blocked: false, events: [], queued: null }, options);
   const previous = globalThis.localStorage, error = console.error;
-  globalThis.localStorage = { getItem: () => f.queued, removeItem() { f.queued = null; }, setItem(_key, value) {
-    if (f.quota) throw new Error('QuotaExceededError');
+  globalThis.localStorage = { getItem: () => f.queued, removeItem() { if (f.blocked) throw new Error('SecurityError'); f.queued = null; }, setItem(_key, value) {
+    if (f.quota || f.blocked) throw new Error('QuotaExceededError');
     f.queued = value;
   } };
   console.error = () => {};
@@ -56,4 +59,17 @@ test('an item that can be neither deleted nor queued is reported with its files 
   setup(t, { rowError: true, quota: true });
   await assert.rejects(deleteImages([media('a'), media('b')]), error => error instanceof DeleteImagesError && error.failedIds.join() === 'a,b');
   assert.deepEqual(f.events, ['row', 'row']);
+});
+
+test('in a partly failed batch only the item that could not be deleted or queued is reported', async t => {
+  setup(t, { rowError: ['b'], quota: true });
+  await assert.rejects(deleteImages([media('a'), media('b')]), error => error instanceof DeleteImagesError && error.failedIds.join() === 'b');
+  assert.ok(f.events.includes('files:user-1/a.png+user-1/a_thumb.png'));
+  assert.ok(!f.events.some(event => event.startsWith('files:user-1/b')));
+});
+
+test('a deleted row is not reported as failed when the retry queue cannot be cleared', async t => {
+  setup(t, { blocked: true });
+  await deleteImages([media('a')]);
+  assert.deepEqual(f.events, ['row', 'files:user-1/a.png+user-1/a_thumb.png']);
 });

@@ -1673,18 +1673,21 @@ export const deleteImage = async (media: GeneratedMedia): Promise<void> => {
     if (!userId) throw new Error('Not authenticated');
     // Delete or queue the DB row first: if it can be neither, this throws and
     // the item is restored with its files intact.
+    let rowDeleted = false;
     try {
       const { error: dbError } = await supabase.from('generations').delete().eq('id', media.id);
       if (dbError) {
         console.error(`DB delete failed for ${media.id}, queuing for retry:`, dbError.message);
         addPendingDeletion(media.id);
       } else {
-        removePendingDeletion(media.id);
+        rowDeleted = true;
       }
     } catch (e) {
       console.error(`DB delete error for ${media.id}, queuing for retry:`, e);
       addPendingDeletion(media.id);
     }
+    // The row is gone; a queue entry left by a failed cleanup only repeats that delete.
+    if (rowDeleted) try { removePendingDeletion(media.id); } catch { /* storage unavailable */ }
 
     // Delete storage files (best-effort - files may already be gone)
     try {
