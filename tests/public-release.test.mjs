@@ -65,13 +65,19 @@ test('release auditing covers database sidecars, Windows profiles and fal keys w
   assert.deepEqual(rules('a.ts', `const k = "${['sk', 'proj', 'A'.repeat(40)].join('-')}"`), ['provider-credential']);
 });
 
-test('a source copy without Git still scans nested bin and dist folders', async () => {
+test('a source copy without Git still scans nested bin and dist folders but skips nested build outputs', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'banana-pregit-audit-'));
   try {
     await fs.mkdir(path.join(root, 'tools', 'bin'), { recursive: true });
     await fs.writeFile(path.join(root, 'tools', 'bin', 'config.txt'), ['sk', 'proj', 'B'.repeat(40)].join('-'));
+    // A local Swift build or package install below the root is never source.
+    for (const folder of ['desktop/macos/.build/debug', 'desktop/macos/DerivedData', 'packages/app/node_modules/x']) {
+      await fs.mkdir(path.join(root, folder), { recursive: true });
+      await fs.writeFile(path.join(root, folder, 'output.db'), 'build output');
+    }
     const result = await auditPublicRelease(root);
     assert.equal(result.ok, false);
     assert.ok(result.findings.some(f => f.path === 'tools/bin/config.txt' && f.rule === 'provider-credential'));
+    assert.deepEqual(result.findings.filter(f => f.path !== 'tools/bin/config.txt'), []);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

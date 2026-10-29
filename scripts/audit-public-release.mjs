@@ -41,8 +41,9 @@ export function inspectContent(name, bytes) {
 
 // Without Git there is no tracked-file list to restore skipped folders, so a
 // pre-Git copy skips only the root build outputs, not every "bin"/"dist" folder.
-const preGitIgnored = name => name === '.git' || name.endsWith('/.git')
-  || ['node_modules', 'dist', '.build', 'DerivedData', 'release-artifacts', 'desktop/windows/bin', 'desktop/windows/obj'].includes(name);
+// Folders that are never source are skipped at any depth.
+const preGitIgnored = name => /(?:^|\/)(?:\.git|node_modules|\.build|DerivedData)$/.test(name)
+  || ['dist', 'release-artifacts', 'desktop/windows/bin', 'desktop/windows/obj'].includes(name);
 
 async function sourceFiles(root, relative = '', skip = (name, entry) => ignoredDirectories.has(entry.name)) {
   const files = [];
