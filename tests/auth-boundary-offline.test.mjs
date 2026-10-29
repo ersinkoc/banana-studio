@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const react = `const R=()=>globalThis.__renderer;export const useState=v=>R().useState(v),useRef=v=>R().useRef(v),useEffect=(f,d)=>R().useEffect(f,d),useCallback=(f,d)=>R().useMemo(()=>f,d),useMemo=(f,d)=>R().useMemo(f,d);
   export default {};`;
 const supabase = `export const isAuthSessionMissingError=()=>false;export const isAuthRetryableFetchError=e=>e?.name==='AuthRetryableFetchError';
-  export const createClient=()=>({auth:{getUser:async()=>globalThis.__auth.getUser(),getSession:async()=>({data:{session:{user:globalThis.__auth.user,access_token:'t'}},error:null}),
+  export const createClient=()=>({auth:{getUser:async()=>globalThis.__auth.getUser(),getSession:async()=>globalThis.__auth.session?.()??({data:{session:{user:globalThis.__auth.user,access_token:'t'}},error:null}),
     onAuthStateChange:()=>({data:{subscription:{unsubscribe(){}}}}),signOut:async()=>({error:null})},
     from:table=>{const q={select:()=>q,eq:()=>q,ilike:()=>q,maybeSingle:async()=>globalThis.__auth.allow(),single:async()=>({data:{id:'u1',role:'user'},error:null})};return q;}});`;
 const fixtures = { react, 'jsx-runtime': 'export const jsx=(type,props)=>({type,props}),jsxs=jsx,Fragment="Fragment";', 'supabase-js': supabase,
@@ -83,5 +83,17 @@ test('an unreachable first check grants nothing', async t => {
   setup(t);
   globalThis.__auth.getUser = async () => offline;
   const boundary = mount(); await settle();
+  assert.equal(boundary.view(), 'UNAUTHORIZED');
+});
+
+test('an expired session that cannot be refreshed offline keeps the workspace; a revoked one closes it', async t => {
+  setup(t);
+  const boundary = mount(); await settle();
+  // Waking after the access token expired: the refresh request cannot reach the server.
+  globalThis.__auth.session = () => ({ data: { session: null }, error: offline.error });
+  await boundary.refresh();
+  assert.equal(boundary.view(), 'WORKSPACE');
+  globalThis.__auth.session = () => ({ data: { session: null }, error: Object.assign(new Error('Invalid Refresh Token'), { name: 'AuthApiError', status: 400 }) });
+  await boundary.refresh();
   assert.equal(boundary.view(), 'UNAUTHORIZED');
 });

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { Session } from '@supabase/supabase-js';
+import { isAuthRetryableFetchError, type Session } from '@supabase/supabase-js';
 import type { UserProfile } from '../types';
 import { AuthorizationUnavailableError, getProfile, getSession, isUserAuthorized, onAuthStateChange, signOut } from '../services/authService';
 import { clearLocalMediaCache } from '../services/storageService';
@@ -69,14 +69,7 @@ export function AuthBoundary({ children }: {
           setLoading(false);
           return;
         }
-        let authorized: boolean;
-        try { authorized = await isUserAuthorized(userId); }
-        catch (error) {
-          // Unreachable while this user's workspace is open (e.g. waking offline):
-          // keep it; the server still checks access on every request. Nothing new is granted.
-          if (error instanceof AuthorizationUnavailableError && verified.current === userId) return;
-          throw error;
-        }
+        const authorized = await isUserAuthorized(userId);
         if (!isCurrent(check)) return;
         if (!authorized) {
           forgetIdentity();
@@ -97,8 +90,13 @@ export function AuthBoundary({ children }: {
         setAccess(previous => ({ userId, profile: profile !== undefined ? profile : previous?.userId === userId ? previous.profile : null }));
         setDenied(false);
         setLoading(false);
-      } catch {
+      } catch (error) {
         if (!isCurrent(check)) return;
+        // Offline while this user's workspace is open (e.g. waking a laptop): an expired
+        // session could not be refreshed, or access could not be checked. Keep it; the
+        // server still checks access on every request. A first check is never opened this way.
+        const offline = error instanceof AuthorizationUnavailableError || isAuthRetryableFetchError(error);
+        if (offline && verified.current !== null && verified.current === identity.current) return;
         forgetIdentity();
         setDenied(true);
         setLoading(false);
