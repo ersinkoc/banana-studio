@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import type { UserProfile } from '../types';
-import { getProfile, getSession, isUserAuthorized, onAuthStateChange, signOut } from '../services/authService';
+import { AuthorizationUnavailableError, getProfile, getSession, isUserAuthorized, onAuthStateChange, signOut } from '../services/authService';
 import { clearLocalMediaCache } from '../services/storageService';
 import { LoginScreen } from './LoginScreen';
 
@@ -15,6 +15,8 @@ export function AuthBoundary({ children }: {
   const [loading, setLoading] = useState(true);
   const [denied, setDenied] = useState(false);
   const identity = useRef<string | null>(null);
+  // The user whose access this component last verified and opened.
+  const verified = useRef<string | null>(null);
   const revision = useRef(0);
   const signingOut = useRef(false);
   const cacheCleanup = useRef<Promise<void>>(Promise.resolve());
@@ -22,6 +24,7 @@ export function AuthBoundary({ children }: {
   const forgetIdentity = useCallback(() => {
     const previousId = identity.current;
     identity.current = null;
+    verified.current = null;
     setAccess(null);
     cacheCleanup.current = cacheCleanup.current
       .then(() => clearLocalMediaCache(previousId || undefined))
@@ -66,7 +69,14 @@ export function AuthBoundary({ children }: {
           setLoading(false);
           return;
         }
-        const authorized = await isUserAuthorized(userId);
+        let authorized: boolean;
+        try { authorized = await isUserAuthorized(userId); }
+        catch (error) {
+          // Unreachable while this user's workspace is open (e.g. waking offline):
+          // keep it; the server still checks access on every request. Nothing new is granted.
+          if (error instanceof AuthorizationUnavailableError && verified.current === userId) return;
+          throw error;
+        }
         if (!isCurrent(check)) return;
         if (!authorized) {
           forgetIdentity();
@@ -83,6 +93,7 @@ export function AuthBoundary({ children }: {
         await cacheCleanup.current;
         if (!isCurrent(check)) return;
         identity.current = userId;
+        verified.current = userId;
         setAccess(previous => ({ userId, profile: profile !== undefined ? profile : previous?.userId === userId ? previous.profile : null }));
         setDenied(false);
         setLoading(false);

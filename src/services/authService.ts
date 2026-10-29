@@ -1,4 +1,4 @@
-import { createClient, Session, SupabaseClient } from '@supabase/supabase-js';
+import { createClient, isAuthRetryableFetchError, Session, SupabaseClient } from '@supabase/supabase-js';
 import { getCloudPublicConfig, getWorkspaceConfig } from '../lib/config/runtimeConfig';
 import { createLocalWorkspaceClient } from '../../desktop/shared/browserClient';
 import { createSessionReader, retryTransientRead } from '../lib/shared/transientRead';
@@ -92,33 +92,43 @@ export const onAuthStateChange = (callback: (session: Session | null, event?: st
 };
 
 /** Only a verified identity with an exact, active allowlist entry may enter. */
+/** The access check could not reach the server: it neither grants nor revokes access. */
+export class AuthorizationUnavailableError extends Error {
+  constructor() { super('Access could not be verified. Check your connection.'); }
+}
+
 export const isUserAuthorized = async (expectedUserId?: string): Promise<boolean> => {
   const MAX_ATTEMPTS = 3;
+  let unreachable = false;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
-      if (userError) throw userError;
+      if (userError) throw isAuthRetryableFetchError(userError) ? new AuthorizationUnavailableError() : userError;
       if (!user?.email || !user.email_confirmed_at || (user as { is_anonymous?: boolean }).is_anonymous
         || (expectedUserId && user.id !== expectedUserId)) return false;
 
       // LIKE treats '_' and '%' as wildcards, both valid email characters.
       const email = user.email.trim().toLowerCase();
       const literalEmail = email.replace(/[\\%_]/g, '\\$&');
-      const { data, error } = await supabase
+      const { data, error, status } = await supabase
         .from('authorized_emails')
         .select('email')
         .eq('is_active', true)
         .ilike('email', literalEmail)
         .maybeSingle();
-      if (error) throw error;
+      // status 0: the request never reached the server.
+      if (error) throw status === 0 ? new AuthorizationUnavailableError() : error;
       return !!data && String(data.email || '').trim().toLowerCase() === email;
-    } catch {
+    } catch (error) {
+      unreachable = error instanceof AuthorizationUnavailableError;
       if (attempt < MAX_ATTEMPTS) {
         await new Promise(resolve => setTimeout(resolve, 400 * attempt));
       }
     }
   }
-  // Network errors and expired/revoked identities never grant access.
+  // Network errors and expired/revoked identities never grant access. An
+  // unreachable check is reported so a verified session is not mistaken for a revoked one.
+  if (unreachable) throw new AuthorizationUnavailableError();
   return false;
 };
 
