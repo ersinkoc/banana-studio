@@ -70,6 +70,8 @@ test('a source copy without Git still scans nested bin and dist folders but skip
   try {
     await fs.mkdir(path.join(root, 'tools', 'bin'), { recursive: true });
     await fs.writeFile(path.join(root, 'tools', 'bin', 'config.txt'), ['sk', 'proj', 'B'.repeat(40)].join('-'));
+    await fs.mkdir(path.join(root, 'packages', 'web', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(root, 'packages', 'web', 'dist', 'app.js'), ['sk', 'proj', 'C'.repeat(40)].join('-'));
     // A local Swift build or package install below the root is never source.
     for (const folder of ['desktop/macos/.build/debug', 'desktop/macos/DerivedData', 'packages/app/node_modules/x']) {
       await fs.mkdir(path.join(root, folder), { recursive: true });
@@ -77,7 +79,8 @@ test('a source copy without Git still scans nested bin and dist folders but skip
     }
     const result = await auditPublicRelease(root);
     assert.equal(result.ok, false);
-    assert.ok(result.findings.some(f => f.path === 'tools/bin/config.txt' && f.rule === 'provider-credential'));
-    assert.deepEqual(result.findings.filter(f => f.path !== 'tools/bin/config.txt'), []);
+    const scanned = ['tools/bin/config.txt', 'packages/web/dist/app.js'];
+    for (const file of scanned) assert.ok(result.findings.some(f => f.path === file && f.rule === 'provider-credential'), file);
+    assert.deepEqual(result.findings.filter(f => !scanned.includes(f.path)), []);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
