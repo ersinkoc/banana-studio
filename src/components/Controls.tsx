@@ -801,7 +801,7 @@ export const Controls: React.FC<ControlsProps> = ({
   };
 
   // Several attachment problems in one action are all shown.
-  const addAttachmentError = (message: string) => setAttachmentError(previous => previous ? `${previous} ${message}` : message);
+  const addAttachmentError = (message: string) => setAttachmentError(previous => previous?.includes(message) ? previous : previous ? `${previous} ${message}` : message);
 
   const handleVideoFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
@@ -840,19 +840,20 @@ export const Controls: React.FC<ControlsProps> = ({
       };
     }));
     // Reading durations can take seconds; merge into the latest draft and its latest limit.
-    let dropped = 0;
+    let cut: typeof newRefs = [];
     flushSync(() => onChange(previous => {
       const audios = previous.referenceAudios || [];
       const kept = newRefs.slice(0, Math.max(0, attachLimitsRef.current.audios - audios.length));
-      dropped = newRefs.length - kept.length;
+      cut = newRefs.slice(kept.length);
       return {
         ...previous,
         referenceAudios: [...audios, ...kept],
         ...(switchToVideo ? { mode: 'video' as const } : {}),
       };
     }));
-    // Files over the limit before reading were already reported.
-    if (dropped && toAdd.length === files.length) addAttachmentError(`Limit reached: ${attachLimitsRef.current.audios} audio clips max.`);
+    // Cut clips never reached the draft: release their object URLs and report them.
+    cut.forEach(ref => URL.revokeObjectURL(ref.url));
+    if (cut.length) addAttachmentError(`Limit reached: ${attachLimitsRef.current.audios} audio clips max.`);
   };
 
   const handleAudioFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {

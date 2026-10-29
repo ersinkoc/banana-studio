@@ -13,22 +13,22 @@ const code = transformSync(`module.exports = env => { let { config, onChange, se
   ${audio}
   ${pif}
   return { processImageFiles, handleAudioFileUpload, drop: async e => { ${drop} } }; };`, { loader: 'ts', format: 'cjs' }).code;
-const setup = (start, gate, max = 14, failRead, queued) => {
+const setup = (start, gate, max = 14, failRead, queued, audios = 3) => {
   let state = start;
   // queued: updates wait for a render, as React batches them; flushSync applies them now.
   const pending = [];
   const render = () => { while (pending.length) state = pending.shift()(state); };
   // What a re-render publishes after commit; tests change it to simulate a model switch.
-  const limits = { images: max, audios: 3 };
-  const errors = [];
+  const limits = { images: max, audios };
+  const errors = [], revoked = [];
   const env = { config: start, onChange: v => { const update = typeof v === 'function' ? v : () => v; if (queued) pending.push(update); else state = update(state); }, setAttachmentError: e => errors.push(e), flushSync: fn => { fn(); render(); },
-    maxReferenceImages: max, maxReferenceVideos: 3, maxReferenceAudios: 3, isH3VideoConfig: false,
+    maxReferenceImages: max, maxReferenceVideos: 3, maxReferenceAudios: audios, isH3VideoConfig: false,
     readFileAsBase64: async f => { if (gate) await gate; if (failRead?.(f)) throw new Error('read failed'); return 'data:' + f.name; }, getMimeType: f => f.type, estimateBase64Size: () => 10, compressImage: async d => d,
     processVideoFiles: async files => { env.onChange(prev => ({ ...prev, referenceVideos: [...(prev.referenceVideos || []), ...files.map(f => ({ id: f.name }))], mode: 'video' })); },
-    readAudioDuration: async () => { if (gate) await gate; return 3; }, audioInputRef: { current: null }, uploadingReferenceVideos: 0, addAttachmentError: e => errors.push(e), URL: { createObjectURL: f => 'blob:' + f.name },
+    readAudioDuration: async () => { if (gate) await gate; return 3; }, audioInputRef: { current: null }, uploadingReferenceVideos: 0, addAttachmentError: e => errors.push(e), URL: { createObjectURL: f => 'blob:' + f.name, revokeObjectURL: url => revoked.push(url) },
     attachLimitsRef: { get current() { return { ...limits, config: state }; } } };
   const mod = { exports: {} }; new Function('module', code)(mod);
-  return { api: mod.exports(env), env, limits, errors, render, get: () => state };
+  return { api: mod.exports(env), env, limits, errors, revoked, render, get: () => state };
 };
 
 const base = { prompt: 'old', mode: 'image', referenceImages: [], referenceVideos: [], referenceAudios: [] };
@@ -99,6 +99,16 @@ test('overlapping audio uploads warn about the clip their queued update cut', as
   g.release(); await Promise.all(both); t.render();
   assert.equal(t.get().referenceAudios.length, 3);
   assert.ok(t.errors.includes('Limit reached: 3 audio clips max.'));
+});
+test('audio clips cut by a lower limit release their URLs and are reported after the switch cleared the warning', async () => {
+  // Three picked against a limit of two: the third is reported before reading.
+  const g = gated(); const t = setup(base, g.gate, 14, undefined, true, 2);
+  const pending = t.api.handleAudioFileUpload({ target: { files: ['a', 'b', 'c'].map(n => file(n + '.mp3', 'audio/mpeg')) } });
+  // A switch to a one-clip limit clears that warning while the two are read.
+  t.limits.audios = 1; t.errors.length = 0; g.release(); await pending; t.render();
+  assert.deepEqual(t.get().referenceAudios.map(a => a.url), ['blob:a.mp3']);
+  assert.deepEqual(t.revoked, ['blob:b.mp3']);
+  assert.ok(t.errors.includes('Limit reached: 1 audio clips max.'));
 });
 test('a failed read leaves the draft unchanged and a retry adds the image exactly once', async () => {
   let fail = true; const t = setup(base, null, 14, () => fail);
