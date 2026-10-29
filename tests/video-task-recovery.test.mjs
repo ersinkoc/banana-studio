@@ -62,7 +62,7 @@ test('an accepted Seedance task is saved on the caller\'s gallery row by the ser
   };
   const seedance = (await bundle('api/seedance-video.ts', stubs)).default;
   const fetchImpl = globalThis.fetch;
-  const submit = async (body, db = () => ({ data: { id: 'row' }, error: null })) => {
+  const submit = async (body, db = () => ({ data: { id: 'row', type: 'video' }, error: null })) => {
     process.env.FAL_KEY = process.env.EVOLINK_API_KEY = 'synthetic'; globalThis.__ops = []; globalThis.__db = db;
     globalThis.fetch = async url => respond(String(url).includes('evolink') ? { id: 'evo_1' } : { request_id: 'fal_1' });
     let status = 0, json; const res = { setHeader() {}, status(value) { status = value; return this; }, json(value) { json = value; return this; }, end() { return this; } };
@@ -75,8 +75,29 @@ test('an accepted Seedance task is saved on the caller\'s gallery row by the ser
     assert.equal(result.status, 200, provider);
     assert.deepEqual([result.saved.value.task_id, result.saved.where], [result.json.taskId, { id: 'gen-1', user_id: 'u1' }], provider);
   }
-  const failed = await submit({ ...body, provider: 'fal' }, op => op.table === 'generations' ? { data: null, error: { message: 'timeout' } } : { data: { id: 'x' }, error: null });
+  const failed = await submit({ ...body, provider: 'fal' }, op => op.table === 'generations' && op.op === 'update' ? { data: null, error: { message: 'timeout' } } : { data: { id: 'x', type: 'video' }, error: null });
   assert.equal(failed.status, 503);
   assert.equal(failed.json.taskId, 'bs_fal_seedance-2.5_fal_1');
   assert.equal((await submit({ ...body, provider: 'fal', generationId: '../x' })).status, 400);
+});
+
+test('a Seedance submission for a saved video that no longer exists is never sent to the provider', async () => {
+  const recorder = `const from=table=>{const op={table,op:'select'};const q={select(){return q},update(v){op.op='update';op.value=v;return q},insert(v){op.op='insert';op.value=v;return q},
+    eq(k,v){(op.where=op.where||{})[k]=v;return q},limit(){return q},maybeSingle(){return q},then(ok,fail){globalThis.__ops.push(op);return Promise.resolve(globalThis.__db(op)).then(ok,fail)}};return q;};`;
+  const seedance = (await bundle('api/seedance-video.ts', {
+    'auth.js': `export const applyCors=()=>{};export const requireUser=async()=>({id:'u1'});export const createUserScopedClient=()=>({});${recorder}export const createServiceRoleClient=()=>({from});`,
+    '/providerConfiguration.js': 'export const chooseProvider=(model,provider)=>provider||"fal";',
+    '/imageStorage.js': 'export const signedMediaUrl=async()=>"";',
+  })).default;
+  const fetchImpl = globalThis.fetch;
+  for (const provider of ['fal', 'evolink']) for (const [row, error, expected] of [[null, null, 404], [{ id: 'gen-1', type: 'image' }, null, 404], [null, { message: 'timeout' }, 503]]) {
+    process.env.FAL_KEY = process.env.EVOLINK_API_KEY = 'synthetic'; globalThis.__ops = []; let billed = 0;
+    globalThis.__db = op => op.table === 'generations' ? { data: row, error } : { data: { id: 'x' }, error: null };
+    globalThis.fetch = async () => { billed++; return respond({ id: 'evo_1', request_id: 'fal_1' }); };
+    let status = 0; const res = { setHeader() {}, status(value) { status = value; return this; }, json() { return this; }, end() { return this; } };
+    try { await seedance({ method: 'POST', headers: {}, query: {}, body: { provider, videoModel: 'seedance-2.5', mode: 'text_only', prompt: 'a fox', duration: 5, quality: '720p', aspectRatio: '16:9', generationId: 'gen-1' } }, res); }
+    finally { globalThis.fetch = fetchImpl; }
+    assert.deepEqual([status, billed], [expected, 0], `${provider} ${JSON.stringify(row)} ${error?.message}`);
+    assert.deepEqual(globalThis.__ops.find(op => op.table === 'generations').where, { id: 'gen-1', user_id: 'u1' });
+  }
 });

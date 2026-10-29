@@ -4,7 +4,7 @@ import { chooseProvider } from './_lib/providerConfiguration.js';
 import { PROVIDER_KEYS } from '../src/lib/providers.js';
 import { seedanceProviderError, falSeedanceInput, openRouterSeedanceInput } from '../src/lib/video/seedanceProviders.js';
 import { isReferenceUrl } from './_lib/providerMedia.js';
-import { isGenerationId, prepareTaskRegistry, registerProviderTask, requireProviderTask, saveGenerationTask } from './_lib/providerTasks.js';
+import { isGenerationId, prepareTaskRegistry, registerProviderTask, requireProviderTask, requireSavedVideo, saveGenerationTask } from './_lib/providerTasks.js';
 import evolinkGenerate from './evolink-generate.js';
 import { signedMediaUrl } from './_lib/imageStorage.js';
 
@@ -31,6 +31,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (body[field] != null && (!Array.isArray(body[field]) || body[field].some((url: unknown) => !isReferenceUrl(url) && !(provider === 'openrouter' && typeof url === 'string' && /^data:image\/(?:png|jpeg|webp);base64,[a-zA-Z0-9+/=]+$/.test(url))))) return res.status(400).json({ error: 'Invalid reference media.' });
       }
       const registry = await prepareTaskRegistry(res); if (!registry) return;
+      if (body.generationId && !await requireSavedVideo(registry, res, body.generationId, user.id)) return;
       const fal = falSeedanceInput(body);
       const response = await fetch(provider === 'fal' ? `https://queue.fal.run/${fal.endpoint}` : 'https://openrouter.ai/api/v1/videos', {
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(55_000), headers: { Authorization: `${provider === 'fal' ? 'Key' : 'Bearer'} ${process.env[PROVIDER_KEYS[provider]]}`, 'Content-Type':'application/json' },
