@@ -121,3 +121,16 @@ test('like SQL, a removed generation is never dispatched and a finished job neve
     assert.equal(f.store.job('row').state,'failed');
   }finally{f.store.close();f.cleanup();}
 });
+
+test('re-claiming an expired image preparation rejects its previous audit, as Postgres does', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'banana-reclaim-')), store = new LocalWorkspace(directory);
+  try {
+    const audits = () => store.db.prepare('SELECT payload FROM ledger').all().map(row => JSON.parse(row.payload)).filter(row => row.generationId === 'job').map(row => row.state);
+    store.workerRpc('enqueue_image_job', { p_id: 'job', p_metadata: {}, p_payload: { id: 'job' } });
+    store.workerRpc('claim_image_job', { p_id: 'job', p_claim: 'first' });
+    assert.equal(store.workerRpc('claim_image_job', { p_id: 'job', p_claim: 'early' }).action, 'wait');
+    const job = store.job('job'); job.claimedAt = 0; store.job('job', job);
+    assert.equal(store.workerRpc('claim_image_job', { p_id: 'job', p_claim: 'second' }).action, 'prepare');
+    assert.deepEqual(audits(), ['rejected', 'accepted']);
+  } finally { store.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});

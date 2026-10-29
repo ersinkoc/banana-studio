@@ -9,13 +9,15 @@ const src = readFileSync(new URL('../src/components/Controls.tsx', import.meta.u
 const piece = (from, to) => { const a = src.indexOf(from); return src.slice(a, src.indexOf(to, a)); };
 const pvf = piece('  const processVideoFiles = async', '  const handleVideoFileUpload = async');
 const hv = piece('  const handleVideoFileUpload = async', '  const handleAudioFileUpload = async');
-const code = transformSync(`module.exports = env => { const { config, onChange, setAttachmentError, isH3VideoConfig, h3State, currentReferenceVideos, maxReferenceVideos, uploadingReferenceVideos, setUploadingReferenceVideos, uploadReferenceVideo, videoInputRef, attachLimitsRef } = env;
+const code = transformSync(`module.exports = env => { const { config, onChange, setAttachmentError, isH3VideoConfig, h3State, currentReferenceVideos, maxReferenceVideos, uploadingReferenceVideos, setUploadingReferenceVideos, uploadReferenceVideo, videoInputRef, attachLimitsRef, flushSync } = env;
   ${pvf}\n${hv}\n return { handleVideoFileUpload }; };`, { loader: 'ts', format: 'cjs' }).code;
 const mod = { exports: {} }; new Function('module', code)(mod);
 
-const scenario = async (start, steps, limits = { videos: 3 }) => {
-  let config = { mode: 'video', referenceVideos: start.map(id => ({ id })) }, uploading = 0; const errors = []; const gates = new Map();
-  const render = () => mod.exports({ config, onChange: f => { config = f(config); }, setAttachmentError: e => { errors.push(typeof e === 'function' ? e(errors.at(-1) ?? null) : e); },
+// queued: updates wait for a render, as React batches them; flushSync applies them now.
+const scenario = async (start, steps, limits = { videos: 3 }, queued = false) => {
+  let config = { mode: 'video', referenceVideos: start.map(id => ({ id })) }, uploading = 0; const errors = []; const gates = new Map(); const queue = [];
+  const flush = () => { while (queue.length) config = queue.shift()(config); };
+  const render = () => mod.exports({ config, onChange: f => { if (queued) queue.push(f); else config = f(config); }, flushSync: fn => { fn(); flush(); }, setAttachmentError: e => { errors.push(typeof e === 'function' ? e(errors.at(-1) ?? null) : e); },
     isH3VideoConfig: false, h3State: {}, currentReferenceVideos: config.referenceVideos, maxReferenceVideos: limits.videos, uploadingReferenceVideos: uploading,
     setUploadingReferenceVideos: f => { uploading = f(uploading); }, videoInputRef: { current: null },
     uploadReferenceVideo: file => new Promise((ok, fail) => gates.set(file.name, { ok: () => ok({ id: file.name }), fail: () => fail(new Error(file.name + ' failed')) })),
@@ -29,7 +31,7 @@ const scenario = async (start, steps, limits = { videos: 3 }) => {
     if (step.settle) await Promise.all(pending.splice(0));
     await new Promise(r => setTimeout(r, 0));
   }
-  gates.forEach(g => g.ok()); await Promise.all(pending);
+  gates.forEach(g => g.ok()); await Promise.all(pending); flush();
   return { videos: config.referenceVideos.map(v => v.id).join(','), limit: errors.some(e => /Limit reached: \d+ videos/.test(e || '')), uploading };
 };
 
@@ -50,4 +52,8 @@ test('a lower limit chosen while a video uploads applies when the upload finishe
   // Seedance 2.5 Generate (10) -> Edit (1) with one source attached.
   assert.deepEqual(await scenario(['src'], [{ pick: ['b'] }, { limit: 1 }], { videos: 10 }), { videos: 'src', limit: true, uploading: 0 });
   assert.deepEqual(await scenario(['src'], [{ pick: ['b'] }], { videos: 10 }), { videos: 'src,b', limit: false, uploading: 0 });
+});
+
+test('uploads that finish before a render warn when the lowered limit cuts one', async () => {
+  assert.deepEqual(await scenario(['v1'], [{ pick: ['a'] }, { pick: ['b'] }, { limit: 2 }, { ok: 'a' }, { ok: 'b' }, { settle: true }], { videos: 3 }, true), { videos: 'v1,a', limit: true, uploading: 0 });
 });

@@ -20,7 +20,7 @@ import { ImageReferenceSummary } from './ImageReferenceSummary';
 import { ImageEditArea } from './ImageEditArea';
 import { getOpenAIImageOptions, getOpenAIImageSize, getSunburstReferences, getImagePromptContextKey, SUNBURST_MODEL, validateOpenAIImageOptions, validateOpenAIImageSize } from '../lib/images/openaiImage';
 import React, { useRef, useState, useEffect, useLayoutEffect } from 'react';
-import { createPortal } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import { Sparkles, Pencil, X, Wand2, Plus, Minus, Loader2, ImagePlus, ChevronDown, ChevronUp, Check, Ratio, Scan, LayoutTemplate, Save, Trash2, RefreshCw, Eraser, Lightbulb, User, Users, Zap, Image as ImageIcon, Play, FileImage, FolderOpen, GripVertical, Video, Clock, Volume2, Music, Film, DollarSign, SkipForward, Rewind, FastForward, RotateCcw, AlertTriangle } from 'lucide-react';
 import { GenerationConfig, ReferenceImage, ReferenceVideo, ReferenceAudio, Template, BrainstormCategory, SavedReferenceImage, IMAGE_MODEL_OPTIONS, VIDEO_MODEL_OPTIONS, VIDEO_ASPECT_RATIO_OPTIONS, VIDEO_QUALITY_OPTIONS, VIDEO_DURATION_OPTIONS, DEFAULT_VIDEO_MODEL, GenerationMode, VideoModelId, VideoOperation, VideoPromptIntent, VideoAspectRatio, VideoQuality, VideoDuration, estimateVideoCost, getVideoPromptIntent, getPromptEnhancementTarget, isEnhancedPromptStale } from '../types';
 import { enhancePrompt, enhanceVideoPrompt } from '../services/geminiService';
@@ -604,9 +604,9 @@ export const Controls: React.FC<ControlsProps> = ({
       // Seedance 2.0 accepts at most 9 reference images (seedanceProviderError, EvoLink).
       : config.mode === 'video' && config.videoModel === 'seedance-2.0' ? 9
       : config.mode === 'image' && config.imageModel === SUNBURST_MODEL ? 16 : 14;
-  // Uploads finish after awaits; they use the limit of the latest committed draft.
-  const attachLimitsRef = useRef({ videos: maxReferenceVideos, config });
-  useLayoutEffect(() => { attachLimitsRef.current = { videos: maxReferenceVideos, config }; });
+  // Attachments finish after awaits; they use the limits of the latest committed draft.
+  const attachLimitsRef = useRef({ images: maxReferenceImages, audios: maxReferenceAudios, videos: maxReferenceVideos, config });
+  useLayoutEffect(() => { attachLimitsRef.current = { images: maxReferenceImages, audios: maxReferenceAudios, videos: maxReferenceVideos, config }; });
   const hasStaleEnhancedPrompt = h3PromptSupported && isEnhancedPromptStale(config);
 
   const formatVideoModel = (model?: VideoModelId) => model === 'seedance-2.0'
@@ -734,11 +734,17 @@ export const Controls: React.FC<ControlsProps> = ({
       }
 
       if (newImages.length > 0) {
-        // Merge into the latest draft; edits made while files were read must survive.
-        onChange(previous => {
-          const images = previous.referenceImages || [];
-          return { ...previous, referenceImages: [...images, ...newImages.slice(0, Math.max(0, MAX_IMAGES - images.length))] };
-        });
+        // Merge into the latest draft: reading/compressing the files awaited,
+        // and edits, other attachments or a model change may have landed meanwhile.
+        // flushSync applies the update now, so the warning reflects what it kept.
+        let dropped = 0;
+        flushSync(() => onChange(prev => {
+          const refs = prev.referenceImages || [];
+          const kept = newImages.slice(0, Math.max(0, attachLimitsRef.current.images - refs.length));
+          dropped = newImages.length - kept.length;
+          return { ...prev, referenceImages: [...refs, ...kept] };
+        }));
+        if (dropped) setAttachmentError(`Limit reached: ${attachLimitsRef.current.images} images max.`);
       }
   };
 
@@ -775,27 +781,32 @@ export const Controls: React.FC<ControlsProps> = ({
           : []
       );
 
-      const latest = attachLimitsRef.current;
+      let dropped = 0;
       if (newRefs.length > 0) {
         // Never exceed the latest limit (the operation may have changed while uploading),
-        // even if another selection finished first.
-        onChange(previous => ({
-          ...previous,
-          referenceVideos: [...(previous.referenceVideos || []), ...newRefs.slice(0, Math.max(0, attachLimitsRef.current.videos - (previous.referenceVideos?.length || 0)))],
-          ...(switchToVideo ? { mode: 'video' as const } : {}),
+        // even if another selection finished first. flushSync applies the update now,
+        // so the warning reflects what it kept.
+        flushSync(() => onChange(previous => {
+          const kept = newRefs.slice(0, Math.max(0, attachLimitsRef.current.videos - (previous.referenceVideos?.length || 0)));
+          dropped = newRefs.length - kept.length;
+          return {
+            ...previous,
+            referenceVideos: [...(previous.referenceVideos || []), ...kept],
+            ...(switchToVideo ? { mode: 'video' as const } : {}),
+          };
         }));
       }
       if (failures.length > 0) {
         setAttachmentError(failures.join('\n'));
       }
-      if (newRefs.length > Math.max(0, latest.videos - (latest.config.referenceVideos?.length || 0))) addAttachmentError(`Limit reached: ${latest.videos} videos max.`);
+      if (dropped) addAttachmentError(`Limit reached: ${attachLimitsRef.current.videos} videos max.`);
     } finally {
       setUploadingReferenceVideos(count => Math.max(0, count - files.length));
     }
   };
 
   // Several attachment problems in one action are all shown.
-  const addAttachmentError = (message: string) => setAttachmentError(previous => previous ? `${previous} ${message}` : message);
+  const addAttachmentError = (message: string) => setAttachmentError(previous => previous?.includes(message) ? previous : previous ? `${previous} ${message}` : message);
 
   const handleVideoFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
@@ -833,15 +844,21 @@ export const Controls: React.FC<ControlsProps> = ({
         duration: await readAudioDuration(url),
       };
     }));
-    // Reading durations can take seconds; merge into the latest draft.
-    onChange(previous => {
+    // Reading durations can take seconds; merge into the latest draft and its latest limit.
+    let cut: typeof newRefs = [];
+    flushSync(() => onChange(previous => {
       const audios = previous.referenceAudios || [];
+      const kept = newRefs.slice(0, Math.max(0, attachLimitsRef.current.audios - audios.length));
+      cut = newRefs.slice(kept.length);
       return {
         ...previous,
-        referenceAudios: [...audios, ...newRefs.slice(0, Math.max(0, MAX_AUDIOS - audios.length))],
+        referenceAudios: [...audios, ...kept],
         ...(switchToVideo ? { mode: 'video' as const } : {}),
       };
-    });
+    }));
+    // Cut clips never reached the draft: release their object URLs and report them.
+    cut.forEach(ref => URL.revokeObjectURL(ref.url));
+    if (cut.length) addAttachmentError(`Limit reached: ${attachLimitsRef.current.audios} audio clips max.`);
   };
 
   const handleAudioFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {

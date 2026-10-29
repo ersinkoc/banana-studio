@@ -57,7 +57,7 @@ test('an accepted Seedance task is saved on the caller\'s gallery row by the ser
     eq(k,v){(op.where=op.where||{})[k]=v;return q},limit(){return q},maybeSingle(){return q},then(ok,fail){globalThis.__ops.push(op);return Promise.resolve(globalThis.__db(op)).then(ok,fail)}};return q;};`;
   const stubs = {
     'auth.js': `export const applyCors=()=>{};export const requireUser=async()=>({id:'u1'});export const createUserScopedClient=()=>({});${recorder}export const createServiceRoleClient=()=>({from});`,
-    '/providerConfiguration.js': 'export const chooseProvider=(model,provider)=>provider||"fal";',
+    '/providerConfiguration.js': 'export const chooseProvider=(model,provider)=>provider||"fal",providerKey=()=>"key";',
     '/imageStorage.js': 'export const signedMediaUrl=async()=>"";',
   };
   const seedance = (await bundle('api/seedance-video.ts', stubs)).default;
@@ -86,7 +86,7 @@ test('a Seedance submission for a saved video that no longer exists is never sen
     eq(k,v){(op.where=op.where||{})[k]=v;return q},limit(){return q},maybeSingle(){return q},then(ok,fail){globalThis.__ops.push(op);return Promise.resolve(globalThis.__db(op)).then(ok,fail)}};return q;};`;
   const seedance = (await bundle('api/seedance-video.ts', {
     'auth.js': `export const applyCors=()=>{};export const requireUser=async()=>({id:'u1'});export const createUserScopedClient=()=>({});${recorder}export const createServiceRoleClient=()=>({from});`,
-    '/providerConfiguration.js': 'export const chooseProvider=(model,provider)=>provider||"fal";',
+    '/providerConfiguration.js': 'export const chooseProvider=(model,provider)=>provider||"fal",providerKey=()=>"key";',
     '/imageStorage.js': 'export const signedMediaUrl=async()=>"";',
   })).default;
   const fetchImpl = globalThis.fetch;
