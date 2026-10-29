@@ -3,6 +3,7 @@ import { withoutLegacyMask } from '../lib/references/referenceImages';
 import { normalizePromptPreparation } from '../lib/prompts/promptPreparation';
 import { createTaskDeadline, waitForTask } from '../lib/shared/asyncTask';
 import { GeneratedMedia, Template, Folder, SavedReferenceImage, SavedPerson, SavedPersonSummary, ReferenceVideo, ReferenceAudio, DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, VideoModelId, VideoOperation, VideoQuality, estimateVideoCost, normalizeYouTubeSource } from '../types';
+import { isAuthSessionMissingError } from '@supabase/supabase-js';
 import { supabase, getCurrentUserId, SUPABASE_URL } from './authService';
 import { retryTransientRead } from '../lib/shared/transientRead';
 import { signMediaUrl } from '../lib/references/mediaAccess';
@@ -1287,7 +1288,9 @@ export const saveVideo = async (
           }
         }
       } catch (fetchErr: any) {
+        // Never persist the expiring provider URL; the caller retries the copy.
         console.warn("Failed to fetch video for storage upload:", fetchErr.message);
+        return undefined;
       }
     }
 
@@ -2257,14 +2260,20 @@ export const getTemplates = async (): Promise<Template[]> => {
     try {
       const userId = await getCurrentUserId();
       if (!userId) return [];
-      const { data } = await supabase.from('templates').select('*').eq('user_id', userId).order('created_at', { ascending: false });
+      const { data, error } = await supabase.from('templates').select('*').eq('user_id', userId).order('created_at', { ascending: false });
+      // A failed read is not "no templates".
+      if (error) throw new Error(`Templates could not be loaded: ${error.message}`);
       if (data) {
         return data.map((row: any) => ({
           id: row.id, name: row.name, config: { ...row.config, referenceImages: row.config?.referenceImages?.map(withoutLegacyMask) }, createdAt: row.created_at
         }));
       }
       return [];
-    } catch (e) { return []; }
+    } catch (e) {
+      // Signed out is "no templates"; any other failure is reported.
+      if (isAuthSessionMissingError(e)) return [];
+      throw e instanceof Error ? e : new Error('Templates could not be loaded.');
+    }
   }
   return [];
 };
@@ -2323,8 +2332,9 @@ export const saveReferenceImage = async (image: SavedReferenceImage): Promise<vo
 
 export const getReferenceGallery = async (): Promise<SavedReferenceImage[]> => {
   if (supabase) {
+    let userId: string | null = null;
     try {
-      const userId = await getCurrentUserId();
+      userId = await getCurrentUserId();
       if (!userId) return [];
       let query = supabase
         .from('reference_images')
@@ -2355,7 +2365,15 @@ export const getReferenceGallery = async (): Promise<SavedReferenceImage[]> => {
       return [];
     } catch (error) {
       console.error('Supabase get reference gallery failed:', error);
-      return [];
+      // Signed out, or a confirmed different user, shows an empty library. Any
+      // other failure (including a failed identity lookup) is not "no saved
+      // references" and must reach the caller.
+      if (isAuthSessionMissingError(error)) return [];
+      if (userId) {
+        const currentUserId = await getCurrentUserId().catch(currentError => isAuthSessionMissingError(currentError) ? null : userId);
+        if (currentUserId !== userId) return [];
+      }
+      throw new Error('Saved references could not be loaded. Close and reopen Saved References to retry.');
     }
   }
 

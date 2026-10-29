@@ -74,14 +74,16 @@ export function AuthBoundary({ children }: {
           setLoading(false);
           return;
         }
-        const profile = await getProfile();
+        // undefined = the read failed: keep the role already verified for this
+        // user (periodic refresh) instead of treating it as "no profile".
+        const profile = await getProfile().catch(() => undefined);
         if (!isCurrent(check)) return;
         // Another identity cannot supply this workspace's profile/admin role.
         if (profile && profile.id !== userId) throw new Error('Session changed');
         await cacheCleanup.current;
         if (!isCurrent(check)) return;
         identity.current = userId;
-        setAccess({ userId, profile });
+        setAccess(previous => ({ userId, profile: profile !== undefined ? profile : previous?.userId === userId ? previous.profile : null }));
         setDenied(false);
         setLoading(false);
       } catch {
